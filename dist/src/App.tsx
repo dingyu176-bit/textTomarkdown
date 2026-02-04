@@ -762,17 +762,17 @@ export default function App() {
     } as any)
   };
   const [update, setUpdate] = useState(0);
-  useEffect(() => {
-    if (
-      dashboardRef.current.state === DashboardState.FullScreen ||
-      dashboardRef.current.state === DashboardState.View
-    ) {
-      setInterval(() => {
-        setUpdate(Math.random());
-        dashboardRef.current.setRendered();
-      }, 1000 * 30)
-    }
-  }, [])
+//  useEffect(() => {
+  //  if (
+   //   dashboardRef.current.state === DashboardState.FullScreen ||
+    //  dashboardRef.current.state === DashboardState.View
+    //) {
+     // setInterval(() => {
+       // setUpdate(Math.random());
+       // dashboardRef.current.setRendered();
+     // }, 1000 * 30)
+    //}
+//  }, [])
 
   return (
        <main className={classnames({
