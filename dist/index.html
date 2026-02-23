@@ -1,32 +1,67 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Base Script</title>
-    <script>
-  function isMobileLark() {
-    const ua = window.navigator.userAgent;
-    const isLark = /feishu/i.test(ua) || /lark/i.test(ua);
-    const isMobile = /mobile|android|iphone|ipad|phone/i.test(ua);
-    return isLark && isMobile;
-  }
-  // if (isMobileLark()) {
-  //   // 满足一定条件的时候，重定向到图片
-  //   window.location.href = "https://ext.baseopendev.com/ext/dashboard_mobile_disable/14c264309a784b577484d14f227664050a115ed7/index.html";
-
-  //   // 阻止后续内容加载
-  //   document.head.insertAdjacentHTML(
-  //     "beforeend",
-  //     `<meta http-equiv="Content-Security-Policy" content="script-src 'none'">`
-  //   );
-  // }
-
-</script>
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>Markdown 渲染仪表盘插件</title>
+    <style>
+      /* 页面加载前的基础样式 */
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      }
+      #loading-placeholder {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+      }
+      #loading-placeholder .icon {
+        font-size: 64px;
+        margin-bottom: 20px;
+      }
+      #loading-placeholder .title {
+        font-size: 24px;
+        font-weight: 600;
+        margin-bottom: 10px;
+      }
+      #loading-placeholder .subtitle {
+        font-size: 14px;
+        opacity: 0.8;
+      }
+      #loading-placeholder .info {
+        margin-top: 30px;
+        padding: 15px 20px;
+        background: rgba(255,255,255,0.15);
+        border-radius: 8px;
+        font-size: 12px;
+        max-width: 400px;
+        text-align: center;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/index.tsx"></script>
+    <div id="root">
+      <!-- 加载占位符 -->
+      <div id="loading-placeholder">
+        <div class="icon">📄</div>
+        <div class="title">Markdown 渲染插件</div>
+        <div class="subtitle">正在初始化...</div>
+        <div class="info">
+          如果长时间停留在此页面，请检查：<br>
+          1. 浏览器控制台是否有错误信息<br>
+          2. 使用的是 http 还是 https 协议
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
