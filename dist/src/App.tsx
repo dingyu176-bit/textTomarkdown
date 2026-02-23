@@ -1,1427 +1,1050 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
-    bitable,
-    dashboard,
-    DashboardState,
-    IData,
-    IDataItem,
-    IDataCondition,
-    workspace,
-    bridge,
-    IDashboard,
-    FieldType,
-    ITable,
-    IGetRecordsParams,
-    IRecord,
-} from "@lark-base-open/js-sdk";
-import { Button, ButtonGroup, ConfigProvider,DatePicker,Divider, Input, Select, Spin, Tooltip } from '@douyinfe/semi-ui';
-import dayjs from 'dayjs';
-import "./i18n/index"
-import { useTranslation } from "react-i18next";
-import ReactMarkdown from 'react-markdown';
+  Layout,
+  Form,
+  Button,
+  Spin,
+  Empty,
+  Typography,
+  Card,
+  Tag,
+  Divider,
+  Banner,
+} from '@douyinfe/semi-ui';
+import { dashboard, base, DashboardState, FieldType } from '@lark-base-open/js-sdk';
+import MarkdownRenderer from './components/MarkdownRenderer';
+import './App.css';
 
-import 'github-markdown-css/github-markdown.css'
+const { Content, Sider } = Layout;
+const { Title, Text, Paragraph } = Typography;
 
-
-import zhCN from '@douyinfe/semi-ui/lib/es/locale/source/zh_CN';
-import enUS from '@douyinfe/semi-ui/lib/es/locale/source/en_US';
-
-import classnames from 'classnames'
-import classNames from 'classnames'
-import 'dayjs/locale/zh-cn';
-import 'dayjs/locale/en';
-import SettingIcon from "./SettingIcon";
-import { IconsMap } from "./iconMap";
-import BaseSelector from './components/BaseSelector';
-import { CloseOutlined, FileTextFilled, MinusOutlined, PlusOutlined } from '@ant-design/icons';
-import { actDestroy } from 'antd/es/message';
-
-interface IMileStoneConfig {
-    title: string;
-    dateType: 'text' | 'ref';
-    iconType: "preset" | "custom"; // 自定义 预设
-    presetIconIndex: number,
-    customIcon: string;
-    dateInfo: {
-        tableId: string;
-        fieldId: string;
-        fieldName: string;
-        dateType: 'earliest' | 'latest';
-        baseToken?: string;
-    };
-    target: string;
-    format: string;
-    color: string;
-    fontSize: number;
-    filterValue: Array<FilterValue>;
-    allFields: any[];
+// 插件配置 - 与飞书 saveConfig 格式匹配
+interface PluginConfig {
+  // 记录选择配置
+  recordConfig?: {
+    tableId: string;
+    recordId: string;
+    fieldId: string;
+  };
+  customConfig: {
+    tableId: string;
+    recordId: string;
+    fieldId: string;
+    showToc: boolean;
+    autoUpdate: boolean;
+  };
+  // 飞书要求的必填字段
+  dataConditions: any[];
 }
 
-type FilterValue = { operator: FilterOperator; value: string; fieldId: string; fieldType: FieldType; }
+// 获取状态名称
+const getStateName = (state: DashboardState | undefined): string => {
+  if (state === undefined) return '未定义';
+  switch (state) {
+    case DashboardState.Create:
+      return '创建状态 (Create)';
+    case DashboardState.Config:
+      return '配置状态 (Config)';
+    case DashboardState.View:
+      return '展示状态 (View)';
+    case DashboardState.FullScreen:
+      return '全屏状态 (FullScreen)';
+    default:
+      return `未知状态 (${state})`;
+  }
+};
 
-type FilterOperator =
-  | 'eq'
-  | 'neq'
-  | 'contains'
-  | 'not_contains'
-  | 'empty'
-  | 'not_empty';
+// 获取状态颜色
+const getStateColor = (state: DashboardState | undefined): any => {
+  switch (state) {
+    case DashboardState.Create:
+      return 'blue';
+    case DashboardState.Config:
+      return 'orange';
+    case DashboardState.View:
+      return 'green';
+    case DashboardState.FullScreen:
+      return 'purple';
+    default:
+      return 'grey';
+  }
+};
 
-const filterTypeOperators = [
-  { value: 'eq', label: '等于' },
-  { value: 'neq', label: '不等于' },
-  { value: 'contains', label: '包含' },
-  { value: 'not_contains', label: '不包含' },
-  { value: 'empty', label: '为空' },
-  { value: 'not_empty', label: '不为空' },
-];
+// 解析富文本为 Markdown
+interface RichTextSegment {
+  type: string;
+  text: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strikethrough?: boolean;
+}
 
-
-const colors = ["#1F2329", "#1456F0", "#7A35F0", "#35BD4B", "#2DBEAB", "#FFC60A", "#FF811A", "#F54A45"]
-
-
-dayjs.locale('zh-cn');
-
-
-export function SelectRefDate({
-  config,
-  setConfig,
-  isMultipleBase,
-  fields,
-  setFields,
-}: {
-  config: IMileStoneConfig;
-  setConfig: any;
-  isMultipleBase: boolean | undefined;
-  fields: any[];
-  setFields: any;
+const parseRichTextToMarkdown = (segments: RichTextSegment[]): string => {
+  if (!Array.isArray(segments)) return '';
   
-}) {
-  const [tables, setTables] = React.useState<any[]>([]);
-  
-  const [tableLoading, setTableLoading] = React.useState<boolean>(false);
-  const { t } = useTranslation()
-  const baseHasChanged = useRef(false);
-
-  const MIN = 11
-  const MAX = 18
-
-  const zoomOut = () => {
-    setConfig({
-      ...config,
-      fontSize:  Math.max(MIN, config.fontSize - 1)
-    })
+  return segments.map((segment) => {
+    if (segment.type !== 'text') return '';
     
-  }
-
-  const zoomIn = () => {
-    setConfig({
-      ...config,
-      fontSize:  Math.min(MAX, config.fontSize + 1)
-    })
-  }
-
-  async function getTables() {
-    if (isMultipleBase && !config?.dateInfo?.baseToken) {
-      return;
-    }
-    setTableLoading(true);
-    const realBitable = isMultipleBase
-      ? await workspace.getBitable(config.dateInfo.baseToken!)
-      : bitable;
-    let tables = (await realBitable?.base?.getTableMetaList()) || [];
-    setTables(tables);
-    console.log('-------------------------', tables);
+    let text = segment.text;
     
-    if (baseHasChanged.current || (!config?.dateInfo?.tableId || !config?.dateInfo?.fieldId)) {
-      if (tables && tables.length > 0) {
-        let targetTableId = tables[0].id
-        let fields: any = []
-        let targetFieldId = ""
-        let targetFieldName = ""
-        console.log('-------------------------', tables);
-        let all
-        for (let table_info of tables) {
-          // console.log("表格",table_info)
-          let table = await realBitable?.base?.getTableById(table_info.id);
-          all = (await table?.getFieldMetaList()) || [];
-          console.log("所有字段111111", all)
-          setConfig({
-            ...config,
-            allFields: all
-          })
-          console.log("所有字段222222", config)
-          let dateFields = all.filter((item) => item.type === 1 )
-          if (dateFields && dateFields.length > 0) {
-            fields = dateFields
-            targetTableId = table_info.id
-            targetFieldId = dateFields[0].id
-            targetFieldName = dateFields[0].name
-            // console.log("找到字段", dateFields[0])
-            
-            break
-          }
-        }
-        if (fields.length > 0) {
-          console.log("找到字段", config)
-          setFields(fields)
-          setConfig({
-            ...config,
-            allFields: all,
-            dateInfo: {
-              ...config.dateInfo,
-              tableId: targetTableId,
-              fieldId: targetFieldId,
-              fieldName: targetFieldName,
-              dateType: 'earliest'
-            }
-          })
-          console.log('-------------------------', config, 'allFields');
-          
-        }
-      }
+    // 应用样式标记
+    if (segment.strikethrough) {
+      text = `~~${text}~~`;
     }
-
-    if (config.dateType === 'ref' && config.dateInfo.tableId) {
-            // console.log("you have table id")
-            getDateFields(config.dateInfo.tableId);
+    if (segment.italic) {
+      text = `*${text}*`;
     }
-
-    setTableLoading(false);
-  }
-
-  const getBaseToken = async () => {
-    if (config?.dateInfo?.baseToken) {
-      return;
+    if (segment.bold) {
+      text = `**${text}**`;
     }
-    const baseList = await workspace.getBaseList({
-      query: "",
-      page: {
-        cursor: "",
-      },
-    });
-    const initialBaseToken = baseList?.base_list?.[0]?.token || "";
-    setConfig({
-      ...config,
-      dateInfo: {
-        ...config.dateInfo,
-        baseToken: initialBaseToken,
-      },
-    });
+    if (segment.underline) {
+      // Markdown 没有下划线，用 HTML 标签
+      text = `<u>${text}</u>`;
+    }
+    
+    return text;
+  }).join('');
+};
+
+function App() {
+  // ============ 状态显示 ============
+  const [debugInfo, setDebugInfo] = useState<string[]>(['组件初始化中...']);
+  const addDebug = (msg: string) => {
+    setDebugInfo(prev => [...prev.slice(-9), `[${new Date().toLocaleTimeString()}] ${msg}`]);
+    console.log(msg);
   };
 
-  React.useEffect(() => {
-    (async () => {
-      if (isMultipleBase) {
-        getBaseToken();
-      }
-    })();
-  }, [isMultipleBase]);
+  // 仪表盘状态
+  const [state, setState] = useState<DashboardState | undefined>(undefined);
+  
+  // 表单
+  const [formApi, setFormApi] = useState<any>(null);
+  
+  // 数据表列表
+  const [tables, setTables] = useState<any[]>([]);
+  // 记录列表
+  const [records, setRecords] = useState<any[]>([]);
+  // 字段列表
+  const [fields, setFields] = useState<any[]>([]);
+  
+  // Markdown 内容
+  const [markdownContent, setMarkdownContent] = useState<string>('');
+  
+  // 加载状态
+  const [loading, setLoading] = useState(false);
+  
+  // 初始配置
+  const [initialConfig, setInitialConfig] = useState<PluginConfig | null>(null);
+  
+  // SDK 是否就绪
+  const [sdkReady, setSdkReady] = useState(false);
 
-  React.useEffect(() => {
-    if (
-      isMultipleBase === undefined ||
-      (isMultipleBase && !config?.dateInfo?.baseToken)
-    ) {
+  // 待恢复的配置（用于重新进入配置状态时恢复表单）
+  const [pendingRestoreConfig, setPendingRestoreConfig] = useState<PluginConfig | null>(null);
+
+  // ============ 初始化 ============
+  useEffect(() => {
+    addDebug('✅ 组件已挂载');
+    
+    // 检查 SDK
+    try {
+      addDebug('📦 检查 SDK...');
+      console.log('dashboard 对象:', dashboard);
+      console.log('base 对象:', base);
+      console.log('DashboardState:', DashboardState);
+      
+      // 检查 dashboard 是否有 state 属性
+      if (dashboard && typeof dashboard === 'object') {
+        addDebug(`✅ Dashboard SDK 对象存在`);
+        addDebug(`📊 dashboard.state: ${dashboard.state}`);
+        addDebug(`📊 dashboard.state 类型: ${typeof dashboard.state}`);
+        
+        // 设置初始状态
+        if (dashboard.state !== undefined) {
+          setState(dashboard.state);
+          addDebug(`🎨 当前状态: ${getStateName(dashboard.state)}`);
+        } else {
+          addDebug('⚠️ dashboard.state 未定义');
+        }
+        
+        setSdkReady(true);
+        
+        // 加载数据表 - 使用 base 模块
+        loadTables();
+        
+        // 尝试获取当前配置（如果已有）
+        if (typeof dashboard.getConfig === 'function') {
+          addDebug('🔍 尝试获取当前配置...');
+          dashboard.getConfig().then((config: any) => {
+            console.log('【调试】初始配置:', config);
+            if (config?.customConfig?.recordId) {
+              addDebug('✅ 发现已保存的配置，准备恢复');
+              setInitialConfig(config as PluginConfig);
+              setPendingRestoreConfig(config as PluginConfig);
+              // 触发数据加载流程，在数据加载完成后恢复表单
+              const { tableId } = config.customConfig;
+              if (tableId) {
+                addDebug(`🔄 开始恢复数据表: ${tableId.slice(-8)}`);
+                // 设置表ID（这会触发handleTableChange）
+                handleTableChange(tableId, true);
+              }
+              loadData(config as PluginConfig);
+            } else {
+              addDebug('ℹ️ 没有已保存的配置');
+            }
+          }).catch((err: any) => {
+            addDebug(`⚠️ 获取初始配置失败: ${err.message}`);
+          });
+        }
+      } else {
+        addDebug('❌ Dashboard SDK 对象不存在');
+      }
+    } catch (err: any) {
+      addDebug(`❌ SDK 错误: ${err.message}`);
+      console.error('SDK 错误:', err);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ============ 监听配置变化 ============
+  useEffect(() => {
+    if (!dashboard || typeof dashboard.onConfigChange !== 'function') {
+      addDebug('⚠️ onConfigChange 不可用');
       return;
     }
-    if (baseHasChanged.current) {
-      setConfig((prev: IMileStoneConfig) => ({
-        ...prev,
-        dateInfo: {
-          ...prev.dateInfo,
-          tableId: "",
-          fieldId: "",
-          fieldName: "",
-          dateType: "earliest",
+    
+    addDebug('👂 开始监听配置变化...');
+    try {
+      const unsubscribe = dashboard.onConfigChange((config) => {
+        addDebug('📋 配置发生变化');
+        console.log('【调试】收到新配置:', config);
+        
+        const pluginConfig = config as unknown as PluginConfig;
+        setInitialConfig(pluginConfig);
+        
+        if (pluginConfig?.customConfig?.recordId) {
+          addDebug(`📋 记录配置: 表=${pluginConfig.customConfig.tableId?.slice(0,8)}..., 记录=${pluginConfig.customConfig.recordId?.slice(0,8)}..., 字段=${pluginConfig.customConfig.fieldId?.slice(0,8)}...`);
+          
+          // 恢复表单值
+          if (formApi) {
+            addDebug('📝 恢复表单值...');
+            formApi.setValues({
+              tableId: pluginConfig.customConfig.tableId,
+              recordId: pluginConfig.customConfig.recordId,
+              fieldId: pluginConfig.customConfig.fieldId,
+              showToc: pluginConfig.customConfig.showToc ?? false,
+              autoUpdate: pluginConfig.customConfig.autoUpdate ?? true,
+            });
+          }
+        } else {
+          addDebug('⚠️ 配置中没有记录信息');
+        }
+        loadData(pluginConfig);
+      });
+      
+      return () => {
+        addDebug('🛑 停止监听配置变化');
+        if (typeof unsubscribe === 'function') {
+          unsubscribe();
+        }
+      };
+    } catch (err: any) {
+      addDebug(`❌ 监听配置失败: ${err.message}`);
+    }
+  }, [formApi]);
+
+  // ============ 加载数据表 - 使用 base 模块 ============
+  const loadTables = async () => {
+    try {
+      addDebug('📥 正在获取数据表列表...');
+      addDebug(`📦 base 对象类型: ${typeof base}`);
+      
+      // 使用 base.getTableList() 而不是 dashboard.getTableList()
+      if (typeof base.getTableList !== 'function') {
+        addDebug(`❌ base.getTableList 不可用，类型: ${typeof base.getTableList}`);
+        console.log('base 对象:', base);
+        console.log('base 对象 keys:', base ? Object.keys(base) : 'undefined');
+        return;
+      }
+      
+      const tableList = await base.getTableList();
+      addDebug(`✅ 获取到 ${tableList.length} 个数据表`);
+      
+      // 打印第一个数据表的结构用于调试
+      if (tableList.length > 0) {
+        const firstTable = tableList[0] as any;
+        console.log('【调试】第一个数据表原始数据:', firstTable);
+        console.log('【调试】数据表所有属性:', Object.keys(firstTable));
+        
+        // 尝试从 context 获取名称
+        if (firstTable.context && Array.isArray(firstTable.context)) {
+          console.log('【调试】context[0]:', firstTable.context[0]);
+          console.log('【调试】context[1]:', firstTable.context[1]);
+        }
+      }
+      
+      // 处理数据表，确保有 name 属性
+      const processedTables = tableList.map((table: any, index: number) => {
+        let tableName = '';
+        
+        // 尝试从 context 数组获取名称（飞书 SDK 的特殊格式）
+        if (table.context && Array.isArray(table.context) && table.context.length >= 2) {
+          // context[0] 通常是名称，context[1] 是 ID
+          if (typeof table.context[0] === 'string') {
+            tableName = table.context[0];
+          }
+        }
+        
+        // 如果没有从 context 获取到，尝试其他属性
+        if (!tableName) {
+          tableName = table.name || table.tableName || table.title || table.label;
+        }
+        
+        // 兜底显示
+        if (!tableName) {
+          tableName = `数据表 ${index + 1}`;
+        }
+        
+        // 获取 ID
+        let tableId = table.id;
+        if (!tableId && table.context && Array.isArray(table.context) && table.context.length >= 2) {
+          tableId = table.context[1];
+        }
+        
+        addDebug(`📋 表${index + 1}: ${tableName.slice(0, 20)} (id: ${tableId?.slice(-6)})`);
+        
+        return {
+          id: tableId,
+          name: tableName,
+        };
+      });
+      
+      setTables(processedTables);
+      
+      // 如果有待恢复的配置，在数据表加载完成后恢复
+      if (pendingRestoreConfig) {
+        const { tableId } = pendingRestoreConfig.customConfig;
+        if (tableId && formApi) {
+          addDebug(`🔄 恢复数据表选择: ${tableId.slice(-8)}`);
+          setTimeout(() => {
+            formApi.setValues({ tableId });
+            // 触发数据加载
+            handleTableChange(tableId, true);
+          }, 0);
+        }
+      }
+    } catch (err: any) {
+      addDebug(`❌ 获取数据表失败: ${err.message}`);
+      console.error('获取数据表错误:', err);
+    }
+  };
+
+  // ============ 加载字段 - 使用 base 模块 ============
+  const loadFields = async (tableId: string, isRestore: boolean = false) => {
+    try {
+      addDebug(`📥 正在获取字段列表 (表ID: ${tableId})...`);
+      
+      // 检查 tableId 是否有效
+      if (!tableId || typeof tableId !== 'string') {
+        addDebug(`❌ 无效的 tableId: ${tableId} (类型: ${typeof tableId})`);
+        return;
+      }
+      
+      // 使用 base 模块获取字段列表
+      if (typeof base.getTableById !== 'function') {
+        addDebug(`❌ base.getTableById 不可用`);
+        return;
+      }
+      
+      addDebug(`📦 调用 base.getTableById('${tableId}')`);
+      const table = await base.getTableById(tableId);
+      addDebug(`✅ 获取到表对象`);
+      console.log('表对象:', table);
+      
+      let fieldList: any[] = [];
+      
+      if (typeof table.getFieldMetaList !== 'function') {
+        addDebug(`❌ table.getFieldMetaList 不可用，尝试 getFieldList...`);
+        // 备选方案
+        if (typeof table.getFieldList === 'function') {
+          fieldList = await table.getFieldList();
+          addDebug(`✅ 通过 getFieldList 获取到 ${fieldList.length} 个字段`);
+          console.log('字段列表:', fieldList);
+        } else {
+          addDebug(`❌ table.getFieldList 也不可用`);
+          return;
+        }
+      } else {
+        fieldList = await table.getFieldMetaList();
+        addDebug(`✅ 通过 getFieldMetaList 获取到 ${fieldList.length} 个字段`);
+        console.log('字段列表:', fieldList);
+      }
+      
+      // 过滤出文本类型的字段，同时显示所有字段以便调试
+      const textFields = fieldList.filter(
+        (field: any) => {
+          // 接受文本类型(1)
+          const isText = field.type === FieldType.Text || field.type === 1;
+          return isText;
+        }
+      );
+      addDebug(`📝 文本字段: ${textFields.length}/${fieldList.length} 个`);
+      
+      // 如果没有文本字段，显示所有字段以便调试
+      if (textFields.length === 0 && fieldList.length > 0) {
+        addDebug(`⚠️ 未找到文本字段，显示所有字段用于调试`);
+        const firstFewFields = fieldList.slice(0, 10);
+        firstFewFields.forEach((f: any) => {
+          addDebug(`  - ${f.name}: type=${f.type}`);
+        });
+      }
+      
+      const finalFields = textFields.length > 0 ? textFields : fieldList;
+      setFields(finalFields);
+      
+      // 如果是恢复模式且有待恢复的配置，恢复表单值
+      if (isRestore && pendingRestoreConfig && formApi) {
+        const { fieldId } = pendingRestoreConfig.customConfig;
+        addDebug(`🔄 恢复字段选择: ${fieldId?.slice(-8)}`);
+        // 使用 setTimeout 确保状态已更新
+        setTimeout(() => {
+          formApi.setValues({ fieldId });
+          // 恢复完成后清除待恢复配置
+          setPendingRestoreConfig(null);
+          addDebug('✅ 表单恢复完成');
+        }, 0);
+      }
+    } catch (err: any) {
+      addDebug(`❌ 获取字段失败: ${err.message}`);
+      console.error('获取字段错误:', err);
+      console.error('错误堆栈:', err.stack);
+    }
+  };
+
+  // ============ 加载记录列表 ============
+  const loadRecords = async (tableId: string, isRestore: boolean = false) => {
+    try {
+      addDebug(`📥 正在获取记录列表 (表ID: ${tableId})...`);
+      
+      if (typeof base.getTableById !== 'function') {
+        addDebug(`❌ base.getTableById 不可用`);
+        return;
+      }
+      
+      const table = await base.getTableById(tableId);
+      
+      // 获取字段列表以确定主键字段（第一个字段通常是主键）
+      let firstFieldId: string | null = null;
+      try {
+        if (typeof table.getFieldMetaList === 'function') {
+          const fieldMetaList = await table.getFieldMetaList();
+          if (fieldMetaList.length > 0) {
+            firstFieldId = fieldMetaList[0].id;
+            addDebug(`📋 主键字段: ${fieldMetaList[0].name} (${firstFieldId})`);
+          }
+        }
+      } catch (e) {
+        addDebug('⚠️ 获取字段列表失败，将使用第一个非空字段作为主键');
+      }
+      
+      // 获取记录列表（只获取前50条用于选择）
+      let recordList: any[] = [];
+      
+      // 直接从表获取记录
+      if (typeof table.getRecordIdList === 'function') {
+        const recordIds = await table.getRecordIdList();
+        addDebug(`✅ 获取到 ${recordIds.length} 条记录ID`);
+        
+        // 获取记录详情（只取前50条）
+        for (const recordId of recordIds.slice(0, 50)) {
+          try {
+            const record = await table.getRecordById(recordId);
+            
+            // 提取主键显示名称
+            const displayName = extractRecordDisplayName(record, firstFieldId);
+            
+            recordList.push({
+              id: recordId,
+              record: record,
+              displayName: displayName,
+            });
+          } catch (e) {
+            // 忽略单条记录错误
+          }
+        }
+      }
+      
+      addDebug(`✅ 加载了 ${recordList.length} 条记录详情`);
+      setRecords(recordList);
+      
+      // 如果是恢复模式且有待恢复的配置，恢复表单值
+      if (isRestore && pendingRestoreConfig && formApi) {
+        const { recordId } = pendingRestoreConfig.customConfig;
+        addDebug(`🔄 恢复记录选择: ${recordId?.slice(-8)}`);
+        // 使用 setTimeout 确保状态已更新
+        setTimeout(() => {
+          formApi.setValues({ recordId });
+        }, 0);
+      }
+    } catch (err: any) {
+      addDebug(`❌ 获取记录失败: ${err.message}`);
+      console.error('获取记录错误:', err);
+    }
+  };
+
+  // 提取记录的显示名称（主键）
+  const extractRecordDisplayName = (record: any, preferredFieldId: string | null): string => {
+    if (!record || !record.fields) {
+      return '未命名记录';
+    }
+    
+    const fields = record.fields;
+    
+    // 1. 优先使用指定的主键字段
+    if (preferredFieldId && fields[preferredFieldId]) {
+      const value = fields[preferredFieldId];
+      const name = extractTextFromFieldValue(value);
+      if (name) return name;
+    }
+    
+    // 2. 遍历所有字段，找第一个有值的文本字段
+    for (const fieldId of Object.keys(fields)) {
+      const value = fields[fieldId];
+      const name = extractTextFromFieldValue(value);
+      if (name) return name;
+    }
+    
+    return '未命名记录';
+  };
+
+  // 从字段值中提取文本
+  const extractTextFromFieldValue = (value: any): string => {
+    if (value === null || value === undefined) {
+      return '';
+    }
+    
+    // 字符串类型
+    if (typeof value === 'string') {
+      return value.trim() || '';
+    }
+    
+    // 富文本类型（对象数组）
+    if (Array.isArray(value)) {
+      // 飞书富文本格式 [{type: 'text', text: '...'}, ...]
+      const textParts = value
+        .filter((item: any) => item && (item.type === 'text' || item.text))
+        .map((item: any) => item.text || '')
+        .join('');
+      return textParts.trim() || '';
+    }
+    
+    // 数字类型
+    if (typeof value === 'number') {
+      return String(value);
+    }
+    
+    // 其他对象类型，尝试转为字符串
+    if (typeof value === 'object') {
+      // 如果是简单的对象，可能有 text 或 name 属性
+      if (value.text && typeof value.text === 'string') {
+        return value.text.trim();
+      }
+      if (value.name && typeof value.name === 'string') {
+        return value.name.trim();
+      }
+    }
+    
+    return '';
+  };
+
+  // ============ 数据表变更 ============
+  const handleTableChange = async (tableId: string, isRestore: boolean = false) => {
+    addDebug(`🔄 选择数据表: ${tableId} (类型: ${typeof tableId}, 恢复模式: ${isRestore})`);
+    
+    // 确保 tableId 是字符串
+    if (!tableId || typeof tableId !== 'string') {
+      addDebug(`❌ 无效的 tableId，跳过加载`);
+      return;
+    }
+    
+    // 如果不是恢复模式，清空后续选择
+    if (!isRestore) {
+      formApi?.setValues({ recordId: undefined, fieldId: undefined });
+    }
+    setRecords([]);
+    setFields([]);
+    
+    // 加载所有记录和字段
+    await loadRecords(tableId, isRestore);
+    await loadFields(tableId, isRestore);
+  };
+
+  // ============ 加载数据 - 记录模式 ============
+  const loadData = async (config?: PluginConfig) => {
+    if (!config?.customConfig) {
+      addDebug('⚠️ 没有自定义配置');
+      return;
+    }
+    
+    const { tableId, recordId, fieldId } = config.customConfig;
+    
+    if (!tableId) {
+      addDebug('⚠️ 缺少表ID');
+      return;
+    }
+    if (!recordId) {
+      addDebug('⚠️ 缺少记录ID');
+      return;
+    }
+    if (!fieldId) {
+      addDebug('⚠️ 缺少字段ID');
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      addDebug(`📥 正在加载记录数据...`);
+      addDebug(`📋 表: ${tableId}, 记录: ${recordId}, 字段: ${fieldId}`);
+      
+      // 使用 base SDK 获取记录详情
+      if (typeof base.getTableById !== 'function') {
+        addDebug('❌ base.getTableById 不可用');
+        return;
+      }
+      
+      const table = await base.getTableById(tableId);
+      addDebug(`✅ 获取到表对象`);
+      
+      const record = await table.getRecordById(recordId);
+      
+      addDebug(`✅ 获取到记录`);
+      console.log('【调试】记录详情:', record);
+      console.log('【调试】记录字段:', record.fields);
+      console.log('【调试】目标字段ID:', fieldId);
+      console.log('【调试】目标字段值:', record.fields[fieldId]);
+      
+      // 获取指定字段的值
+      const fieldValue = record.fields[fieldId];
+      console.log('【调试】字段值类型:', typeof fieldValue);
+      console.log('【调试】字段值内容:', fieldValue);
+      
+      let content = '';
+      
+      if (typeof fieldValue === 'string') {
+        // 纯文本字段
+        content = fieldValue;
+        addDebug(`✅ 字段值为纯文本，长度: ${content.length}`);
+      } else if (Array.isArray(fieldValue)) {
+        // 富文本字段 - 对象数组格式
+        addDebug(`📝 检测到富文本字段，${fieldValue.length} 个段落`);
+        content = parseRichTextToMarkdown(fieldValue as RichTextSegment[]);
+        addDebug(`✅ 富文本转换完成，长度: ${content.length}`);
+      } else if (fieldValue && typeof fieldValue === 'object') {
+        // 其他对象类型，尝试提取所有文本字段
+        content = JSON.stringify(fieldValue);
+        addDebug(`⚠️ 字段值为对象，已转为JSON，长度: ${content.length}`);
+      } else if (fieldValue === null) {
+        addDebug(`⚠️ 字段值为 null`);
+      } else if (fieldValue === undefined) {
+        addDebug(`⚠️ 字段值为 undefined`);
+      } else {
+        addDebug(`⚠️ 字段值类型: ${typeof fieldValue}`);
+      }
+      
+      addDebug(`📝 最终内容长度: ${content.length}`);
+      setMarkdownContent(content);
+      
+    } catch (err: any) {
+      addDebug(`❌ 加载数据失败: ${err.message}`);
+      console.error('加载数据错误:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ============ 保存配置 ============
+  const handleSave = async () => {
+    try {
+      const values = formApi?.getValues();
+      addDebug(`💾 点击保存按钮`);
+      addDebug(`📋 表单值: ${JSON.stringify(values)}`);
+      
+      // 检查必填项
+      if (!values?.tableId) {
+        addDebug('⚠️ 缺少数据表，无法保存');
+        return;
+      }
+      if (!values?.recordId) {
+        addDebug('⚠️ 缺少记录，无法保存');
+        return;
+      }
+      if (!values?.fieldId) {
+        addDebug('⚠️ 缺少字段，无法保存');
+        return;
+      }
+
+      // 构建配置 - 记录选择模式
+      // 注意：飞书 saveConfig 会将整个对象保存，我们需要符合其格式要求
+      const config: PluginConfig = {
+        // 使用 customConfig 来存储我们的自定义配置
+        customConfig: {
+          tableId: values.tableId,
+          recordId: values.recordId,
+          fieldId: values.fieldId,
+          showToc: values.showToc ?? false,
+          autoUpdate: values.autoUpdate ?? true,
         },
-      }));
-    }
-    getTables();
-  }, [config?.dateInfo?.baseToken, isMultipleBase]);
+        // 飞书要求的必填字段
+        dataConditions: [],
+      };
 
-  async function getDateFields(table_id: string): Promise<{ fields: any[]; all: any[] }> {
-    // console.log("获取", table_id);
-    if (isMultipleBase && !config?.dateInfo?.baseToken) {
-      return { fields: [], all: [] };
+      addDebug(`📤 准备调用 saveConfig`);
+      addDebug(`📋 配置内容: ${JSON.stringify(config, null, 2)}`);
+      
+      if (typeof dashboard.saveConfig !== 'function') {
+        addDebug('❌ saveConfig 不可用');
+        return;
+      }
+      
+      try {
+        addDebug('⏳ 正在调用 saveConfig...');
+        await dashboard.saveConfig(config);
+        addDebug('✅ 配置保存成功！');
+      } catch (saveErr: any) {
+        addDebug(`❌ saveConfig 调用失败: ${saveErr.message}`);
+        console.error('saveConfig 错误:', saveErr);
+        throw saveErr;
+      }
+      
+    } catch (err: any) {
+      addDebug(`❌ 保存配置失败: ${err.message}`);
+      console.error('保存配置完整错误:', err);
+      console.error('错误堆栈:', err.stack);
     }
-    const realBitable = isMultipleBase
-      ? await workspace.getBitable(config.dateInfo.baseToken!)
-      : bitable;
-    let table = await realBitable?.base?.getTableById(table_id);
-    let all = (await table?.getFieldMetaList()) || [];
-    let fields = all.filter(
-      // (item) => item.type === 5 || item.type === 1001 || item.type === 1002
-      (item) => item.type === 1
-    );
-    console.log("所有字段", all)
-    setFields(fields);
-    setConfig({
-      ...config,
-      dateInfo: {
-        ...config.dateInfo,
-        tableId: table_id,
-      },
-      allFields: all
-    });
-    return {
-      fields,
-      all
-    };
-  }
+  };
 
-  return (
-    <div>
-      {isMultipleBase && (
-        <div className={"form-item"}>
-          <BaseSelector
-            baseToken={config.dateInfo.baseToken!}
-            onChange={(v) => {
-              setConfig({
-                ...config,
-                dateInfo: {
-                  ...config.dateInfo,
-                  baseToken: v,
-                },
-              })
-              baseHasChanged.current = true;
-            }
+  // ============ 渲染调试面板 ============
+  const renderDebugPanel = () => (
+    <Card 
+      title="🔧 调试信息" 
+      style={{ marginBottom: 16 }}
+      bodyStyle={{ padding: 12, maxHeight: 300, overflow: 'auto' }}
+    >
+      <div style={{ fontSize: 11, fontFamily: 'monospace', lineHeight: '1.5' }}>
+        <div style={{ marginBottom: 8 }}>
+          <Tag color={getStateColor(state)} size="small">{getStateName(state)}</Tag>
+          <Tag color={sdkReady ? 'green' : 'red'} size="small">SDK: {sdkReady ? '就绪' : '未就绪'}</Tag>
+          <Tag color="grey" size="small">表: {tables.length}</Tag>
+          <Tag color="grey" size="small">记录: {records.length}</Tag>
+          <Tag color="grey" size="small">字段: {fields.length}</Tag>
+        </div>
+        
+        {/* 显示当前配置 */}
+        {initialConfig?.customConfig?.recordId && (
+          <div style={{ 
+            marginBottom: 8, 
+            padding: 6, 
+            background: 'var(--semi-color-fill-0)', 
+            borderRadius: 4,
+            fontSize: 10
+          }}>
+            <div><strong>已保存配置:</strong></div>
+            <div>表: {initialConfig.customConfig.tableId?.slice(-8)}</div>
+            <div>记录: {initialConfig.customConfig.recordId?.slice(-8)}</div>
+            <div>字段: {initialConfig.customConfig.fieldId?.slice(-8)}</div>
+          </div>
+        )}
+        
+        {debugInfo.map((info, idx) => (
+          <div key={idx} style={{ 
+            padding: '1px 0', 
+            borderBottom: idx < debugInfo.length - 1 ? '1px solid var(--semi-color-border)' : 'none',
+            color: info.includes('❌') ? 'var(--semi-color-danger)' : 
+                   info.includes('✅') ? 'var(--semi-color-success)' : 
+                   'var(--semi-color-text-0)'
+          }}>
+            {info}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+
+  // ============ 渲染配置面板 ============
+  const renderConfigPanel = () => (
+    <div className="config-panel">
+      {renderDebugPanel()}
+      
+      <Title heading={5} style={{ marginBottom: 16 }}>
+        Markdown 渲染配置
+      </Title>
+      
+      <Banner
+        type="info"
+        description="请选择数据表 → 选择记录 → 选择Markdown字段"
+        style={{ marginBottom: 16 }}
+      />
+      
+      <Form
+        getFormApi={setFormApi}
+        layout="vertical"
+        onValueChange={(values) => {
+          addDebug(`📝 表单值变化: tableId=${values.tableId}, fieldId=${values.fieldId}`);
+          // 不要自动保存，让用户点击按钮保存
+        }}
+      >
+        {/* 数据表选择 */}
+        <Form.Select
+          field="tableId"
+          label="选择数据表"
+          placeholder="请选择数据表"
+          style={{ width: '100%' }}
+          filter
+          searchPlaceholder="搜索数据表..."
+          optionList={tables.map((table) => ({
+            label: table.name || '未命名表格',
+            value: table.id,
+          }))}
+          onChange={(value: string | number | any[] | Record<string, any>) => {
+            const tableId = String(value);
+            addDebug(`📝 数据表选择变化: ${tableId}`);
+            handleTableChange(tableId);
+          }}
+        />
+
+        {/* 记录选择 */}
+        <Form.Select
+          field="recordId"
+          label="选择记录"
+          placeholder={records.length > 0 ? `请选择记录 (${records.length}条)` : '请先选择数据表'}
+          style={{ width: '100%' }}
+          disabled={records.length === 0}
+          filter
+          searchPlaceholder="搜索记录名称..."
+          optionList={records.map((item) => ({
+            label: item.displayName || '未命名记录',
+            value: item.id,
+          }))}
+        />
+
+        {/* 字段选择 */}
+        <Form.Select
+          field="fieldId"
+          label="Markdown 字段"
+          placeholder={fields.length > 0 ? `请选择字段 (${fields.length}个可用)` : '请先选择数据表'}
+          style={{ width: '100%' }}
+          disabled={fields.length === 0}
+          filter
+          searchPlaceholder="搜索字段..."
+          optionList={fields.map((field) => {
+            // 获取字段类型名称
+            let typeName = '其他';
+            if (field.type === FieldType.Text) typeName = '文本';
+            else if (field.type === 1) typeName = '文本';
+            else typeName = `类型${field.type}`;
+            
+            return {
+              label: `${field.name} (${typeName})`,
+              value: field.id,
+            };
+          })}
+        />
+
+        {/* 显示设置 */}
+        <Divider />
+        <Title heading={6} style={{ marginBottom: 12 }}>
+          显示设置
+        </Title>
+        
+        <Form.Switch
+          field="showToc"
+          label="显示目录"
+          initValue={false}
+        />
+        
+        <Form.Switch
+          field="autoUpdate"
+          label="数据变化时自动更新"
+          initValue={true}
+        />
+
+        {/* 保存按钮 */}
+        <div style={{ marginTop: 24 }}>
+          <Button 
+            type="primary" 
+            theme="solid" 
+            onClick={() => {
+              // 手动验证表单
+              formApi?.validate().then(() => {
+                addDebug('✅ 表单验证通过');
+                handleSave();
+              }).catch((errors: any) => {
+                addDebug('❌ 表单验证失败');
+                console.log('验证错误:', errors);
+              });
+            }} 
+            block
+          >
+            保存配置
+          </Button>
+        </div>
+      </Form>
+    </div>
+  );
+
+  // ============ 渲染内容区 ============
+  const renderContent = () => {
+    // 显示当前状态信息（展示状态和全屏状态不显示）
+    const showStateInfo = state !== DashboardState.View && state !== DashboardState.FullScreen;
+    
+    const stateInfo = showStateInfo ? (
+      <div style={{ marginBottom: 16, padding: 12, background: 'var(--semi-color-fill-0)', borderRadius: 6 }}>
+        <Text strong>当前状态: </Text>
+        <Tag color={getStateColor(state)} size="large">{getStateName(state)}</Tag>
+        <Text style={{ marginLeft: 12, color: 'var(--semi-color-text-2)' }}>
+          {!sdkReady ? 'SDK 未就绪' :
+           state === DashboardState.Create ? '正在创建插件，请配置数据源' :
+           state === DashboardState.Config ? '正在配置插件，修改右侧设置' :
+           '等待初始化...'}
+        </Text>
+      </div>
+    ) : null;
+
+    if (loading) {
+      return (
+        <div className="content-center">
+          {stateInfo}
+          <Spin size="large" tip="加载中..." />
+          <Text type="secondary" style={{ marginTop: 16 }}>
+            正在从多维表格获取数据...
+          </Text>
+        </div>
+      );
+    }
+
+    // 创建状态：显示引导
+    if (state === DashboardState.Create) {
+      return (
+        <div className="content-center" style={{ flexDirection: 'column', padding: 24 }}>
+          {stateInfo}
+          <Empty
+            title="欢迎使用 Markdown 渲染插件"
+            description={
+              <div style={{ textAlign: 'left', maxWidth: 400 }}>
+                <Paragraph>👋 这是一个全新的插件，请先完成配置：</Paragraph>
+                <ol style={{ paddingLeft: 20 }}>
+                  <li>在右侧配置面板选择数据表</li>
+                  <li>选择包含 Markdown 内容的文本字段</li>
+                  <li>（可选）选择视图筛选数据范围</li>
+                  <li>点击保存配置</li>
+                </ol>
+              </div>
             }
           />
         </div>
-      )}
-  <div className={'form-item'}>
-            <div className={'label'} style={{ marginTop: 8 }}>{t("数据源")}</div>
-            <Select
-                onChange={async (v) => {
-                    const { fields, all } = await getDateFields(v as string);
-                    console.log('22222222', fields);
-                    
-                    setTimeout(() => {
-                      setConfig({
-                        ...config,
-                        dateInfo: {
-                            ...config.dateInfo,
-                            tableId: v,
-                            fieldId: fields?.[0] ? fields[0].id : "",
-                            fieldName: fields?.[0] ? fields[0].name : "",
-                            dateType: 'earliest'
-                        },
-                        allFields: all,
-                        filterValue: [],
-                    })
-                    }, 10)
-                }}
-                value={tables.find(item => item.id === config.dateInfo.tableId) ? config.dateInfo.tableId : ""}
-                style={{
-                    width: "100%"
-                }}
-                placeholder={t('请选择数据源')}
-                optionList={tables.map(item => {
-                    return {
-                        label: <div style={{
-                            display: "flex",
-                            alignItems: "center"
-                        }}>
-                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
-                                xmlns="http://www.w3.org/2000/svg">
-                                <path
-                                    d="M1.33203 2.66634C1.33203 1.92996 1.92898 1.33301 2.66536 1.33301H13.332C14.0684 1.33301 14.6654 1.92996 14.6654 2.66634V13.333C14.6654 14.0694 14.0684 14.6663 13.332 14.6663H2.66536C1.92899 14.6663 1.33203 14.0694 1.33203 13.333V2.66634ZM2.66536 2.66634V13.333H13.332V2.66634H2.66536Z"
-                                    fill="var(--icon-color)" />
-                                <path
-                                    d="M8.33203 4.66634C7.96384 4.66634 7.66536 4.96482 7.66536 5.33301C7.66536 5.7012 7.96384 5.99967 8.33203 5.99967H11.332C11.7002 5.99967 11.9987 5.7012 11.9987 5.33301C11.9987 4.96482 11.7002 4.66634 11.332 4.66634H8.33203Z"
-                                    fill="var(--icon-color)" />
-                                <path
-                                    d="M3.9987 5.33301C3.9987 4.96482 4.29718 4.66634 4.66536 4.66634H5.9987C6.36689 4.66634 6.66536 4.96482 6.66536 5.33301C6.66536 5.7012 6.36689 5.99967 5.9987 5.99967H4.66536C4.29717 5.99967 3.9987 5.7012 3.9987 5.33301Z"
-                                    fill="var(--icon-color)" />
-                                <path
-                                    d="M8.33203 7.33301C7.96384 7.33301 7.66536 7.63148 7.66536 7.99967C7.66536 8.36786 7.96384 8.66634 8.33203 8.66634H11.332C11.7002 8.66634 11.9987 8.36786 11.9987 7.99967C11.9987 7.63148 11.7002 7.33301 11.332 7.33301H8.33203Z"
-                                    fill="var(--icon-color)" />
-                                <path
-                                    d="M3.9987 7.99967C3.9987 7.63148 4.29718 7.33301 4.66536 7.33301H5.9987C6.36689 7.33301 6.66536 7.63148 6.66536 7.99967C6.66536 8.36786 6.36689 8.66634 5.9987 8.66634H4.66536C4.29717 8.66634 3.9987 8.36786 3.9987 7.99967Z"
-                                    fill="var(--icon-color)" />
-                                <path
-                                    d="M8.33203 9.99967C7.96384 9.99967 7.66536 10.2982 7.66536 10.6663C7.66536 11.0345 7.96384 11.333 8.33203 11.333H11.332C11.7002 11.333 11.9987 11.0345 11.9987 10.6663C11.9987 10.2982 11.7002 9.99967 11.332 9.99967H8.33203Z"
-                                    fill="var(--icon-color)" />
-                                <path
-                                    d="M3.9987 10.6663C3.9987 10.2982 4.29718 9.99967 4.66536 9.99967H5.9987C6.36689 9.99967 6.66536 10.2982 6.66536 10.6663C6.66536 11.0345 6.36689 11.333 5.9987 11.333H4.66536C4.29717 11.333 3.9987 11.0345 3.9987 10.6663Z"
-                                    fill="var(--icon-color)" />
-                            </svg>
-                            <div style={{ marginLeft: 2 }}>
-                                {item.name}
-                            </div>
-                        </div>,
-                        value: item.id,
-                    }
-                })} 
-                renderSelectedItem={tableLoading ? () => <Spin /> : undefined}
+      );
+    }
+
+    // 配置状态：显示预览
+    if (state === DashboardState.Config) {
+      return (
+        <div style={{ padding: 20 }}>
+          {stateInfo}
+          {!markdownContent ? (
+            <Empty
+              title="暂无预览内容"
+              description="请在右侧配置数据源后，将显示 Markdown 预览"
             />
+          ) : (
+            <Card className="markdown-card" bodyStyle={{ padding: 24 }}>
+              <div style={{ marginBottom: 16, padding: 8, background: '#e6f7ff', borderRadius: 4 }}>
+                <Text type="secondary">👁️ 预览模式 - 配置完成后点击保存</Text>
+              </div>
+              <MarkdownRenderer content={markdownContent} />
+            </Card>
+          )}
         </div>
-        <div className={'form-item'}>
-            <div className={'label'}>
-                {t('文本字段')}
-            </div>
-            <Select
-                style={{
-                    width: "100%"
-                }}
-                onChange={v => {
-                    // console.log('selected field', v);
-                    const selectedField = fields.find(item => item.id === v);
-                    setConfig({
-                        ...config,
-                        dateInfo: {
-                            ...config.dateInfo,
-                            fieldId: v,
-                            fieldName: selectedField?.name || ""
-                        }
-                    })
-                }}
-                value={fields.find(item => item.id === config.dateInfo.fieldId) ? config.dateInfo.fieldId : ""}
-                placeholder={t('请选择文本字段')}
-                optionList={fields.map(item => {
-                    return {
-                        label: (<div style={{
-                            display: 'flex',
-                            alignItems: 'center'
-                        }}>
-                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
-                                xmlns="http://www.w3.org/2000/svg">
-                                <path
-                                    d="M4.66536 1.33301C5.03355 1.33301 5.33203 1.63148 5.33203 1.99967H10.6654C10.6654 1.63148 10.9638 1.33301 11.332 1.33301C11.7002 1.33301 11.9987 1.63148 11.9987 1.99967C12.2748 1.99967 12.8119 1.99967 13.3321 1.99967C14.0684 1.99967 14.6654 2.59663 14.6654 3.33301V13.333C14.6654 14.0694 14.0684 14.6663 13.332 14.6663H2.66536C1.92899 14.6663 1.33203 14.0694 1.33203 13.333L1.33203 3.33301C1.33203 2.59663 1.92896 1.99967 2.66534 1.99967C3.18554 1.99967 3.72257 1.99967 3.9987 1.99967C3.9987 1.63148 4.29717 1.33301 4.66536 1.33301ZM10.6654 3.33301H5.33203C5.33203 3.7012 5.03355 3.99967 4.66536 3.99967C4.29717 3.99967 3.9987 3.7012 3.9987 3.33301H2.66536V13.333H13.332V3.33301H11.9987C11.9987 3.7012 11.7002 3.99967 11.332 3.99967C10.9638 3.99967 10.6654 3.7012 10.6654 3.33301ZM5.9987 9.99967C5.9987 9.63148 5.70022 9.33301 5.33203 9.33301H4.66536C4.29717 9.33301 3.9987 9.63149 3.9987 9.99967V10.6663C3.9987 11.0345 4.29717 11.333 4.66536 11.333H5.33203C5.70022 11.333 5.9987 11.0345 5.9987 10.6663V9.99967ZM6.9987 6.66634C6.9987 6.29815 7.29718 5.99967 7.66536 5.99967H8.33203C8.70022 5.99967 8.9987 6.29815 8.9987 6.66634V7.33301C8.9987 7.7012 8.70022 7.99967 8.33203 7.99967H7.66536C7.29717 7.99967 6.9987 7.7012 6.9987 7.33301V6.66634ZM8.9987 9.99967C8.9987 9.63148 8.70022 9.33301 8.33203 9.33301H7.66536C7.29717 9.33301 6.9987 9.63149 6.9987 9.99967V10.6663C6.9987 11.0345 7.29718 11.333 7.66536 11.333H8.33203C8.70022 11.333 8.9987 11.0345 8.9987 10.6663V9.99967ZM9.9987 9.99967C9.9987 9.63148 10.2972 9.33301 10.6654 9.33301H11.332C11.7002 9.33301 11.9987 9.63149 11.9987 9.99967V10.6663C11.9987 11.0345 11.7002 11.333 11.332 11.333H10.6654C10.2972 11.333 9.9987 11.0345 9.9987 10.6663V9.99967ZM11.9987 6.66634C11.9987 6.29815 11.7002 5.99967 11.332 5.99967H10.6654C10.2972 5.99967 9.9987 6.29815 9.9987 6.66634V7.33301C9.9987 7.7012 10.2972 7.99967 10.6654 7.99967H11.332C11.7002 7.99967 11.9987 7.7012 11.9987 7.33301V6.66634Z"
-                                    fill="var(--icon-color)" />
-                            </svg>
-                            <div style={{ marginLeft: 2 }}>
-                                {item.name}
-                            </div>
-                        </div>),
-                        value: item.id,
-                    }
-                })}
-                renderSelectedItem={tableLoading ? () => <Spin /> : undefined}
-            >
-
-            </Select>
-        </div>
-        <div className={'form-item'}>
-            <div className={'label'}>
-                {t('字体大小')}
-            </div>
-            <ButtonGroup>
-              <Tooltip content={ t('缩小字号') }>
-                <Button
-                  icon={<MinusOutlined />}
-                  onClick={zoomOut}
-                  size="small"
-                />
-              </Tooltip>
-
-              <Button size="small" disabled>
-                {config.fontSize}px
-              </Button>
-
-              <Tooltip content={ t('放大字号') }>
-                <Button
-                  icon={<PlusOutlined />}
-                  onClick={zoomIn}
-                  size="small"
-                />
-              </Tooltip>
-            </ButtonGroup>
-        </div>
-        <div className={'form-item'}>
-            <div className={'label'}>
-                {t('数据过滤')}
-            </div>
-            
-            <div className={'filter-container'}>
-              { config.filterValue?.map((item: FilterValue, index: number) => {
-                return (
-                  <div className={'filter-item'}>
-                  <Select
-                    style={{
-                        width: 120
-                    }}
-                    onChange={v => {
-                        const array = [...config.filterValue || []]
-                        array[index] = {
-                            ...array[index],
-                            fieldId: v as string
-                        }
-                        setConfig({
-                        ...config,
-                        filterValue: array
-                    })
-                    }}
-                    value={config.filterValue[index]?.fieldId || ""}
-                    placeholder={t('请选择过滤字段')}
-                    optionList={config.allFields.map(item => {
-                        return {
-                            label: (<div style={{
-                                display: 'flex',
-                                alignItems: 'center'
-                            }}>
-                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
-                                    xmlns="http://www.w3.org/2000/svg">
-                                    <path
-                                        d="M4.66536 1.33301C5.03355 1.33301 5.33203 1.63148 5.33203 1.99967H10.6654C10.6654 1.63148 10.9638 1.33301 11.332 1.33301C11.7002 1.33301 11.9987 1.63148 11.9987 1.99967C12.2748 1.99967 12.8119 1.99967 13.3321 1.99967C14.0684 1.99967 14.6654 2.59663 14.6654 3.33301V13.333C14.6654 14.0694 14.0684 14.6663 13.332 14.6663H2.66536C1.92899 14.6663 1.33203 14.0694 1.33203 13.333L1.33203 3.33301C1.33203 2.59663 1.92896 1.99967 2.66534 1.99967C3.18554 1.99967 3.72257 1.99967 3.9987 1.99967C3.9987 1.63148 4.29717 1.33301 4.66536 1.33301ZM10.6654 3.33301H5.33203C5.33203 3.7012 5.03355 3.99967 4.66536 3.99967C4.29717 3.99967 3.9987 3.7012 3.9987 3.33301H2.66536V13.333H13.332V3.33301H11.9987C11.9987 3.7012 11.7002 3.99967 11.332 3.99967C10.9638 3.99967 10.6654 3.7012 10.6654 3.33301ZM5.9987 9.99967C5.9987 9.63148 5.70022 9.33301 5.33203 9.33301H4.66536C4.29717 9.33301 3.9987 9.63149 3.9987 9.99967V10.6663C3.9987 11.0345 4.29717 11.333 4.66536 11.333H5.33203C5.70022 11.333 5.9987 11.0345 5.9987 10.6663V9.99967ZM6.9987 6.66634C6.9987 6.29815 7.29718 5.99967 7.66536 5.99967H8.33203C8.70022 5.99967 8.9987 6.29815 8.9987 6.66634V7.33301C8.9987 7.7012 8.70022 7.99967 8.33203 7.99967H7.66536C7.29717 7.99967 6.9987 7.7012 6.9987 7.33301V6.66634ZM8.9987 9.99967C8.9987 9.63148 8.70022 9.33301 8.33203 9.33301H7.66536C7.29717 9.33301 6.9987 9.63149 6.9987 9.99967V10.6663C6.9987 11.0345 7.29718 11.333 7.66536 11.333H8.33203C8.70022 11.333 8.9987 11.0345 8.9987 10.6663V9.99967ZM9.9987 9.99967C9.9987 9.63148 10.2972 9.33301 10.6654 9.33301H11.332C11.7002 9.33301 11.9987 9.63149 11.9987 9.99967V10.6663C11.9987 11.0345 11.7002 11.333 11.332 11.333H10.6654C10.2972 11.333 9.9987 11.0345 9.9987 10.6663V9.99967ZM11.9987 6.66634C11.9987 6.29815 11.7002 5.99967 11.332 5.99967H10.6654C10.2972 5.99967 9.9987 6.29815 9.9987 6.66634V7.33301C9.9987 7.7012 10.2972 7.99967 10.6654 7.99967H11.332C11.7002 7.99967 11.9987 7.7012 11.9987 7.33301V6.66634Z"
-                                        fill="var(--icon-color)" />
-                                </svg>
-                                <div style={{ marginLeft: 2 }}>
-                                    {item.name}
-                                </div>
-                            </div>),
-                            value: item.id,
-                        }
-                    })}
-                    renderSelectedItem={tableLoading ? () => <Spin /> : undefined}
-                >
-
-                </Select>
-                <Select
-                    style={{
-                        width: 90
-                    }}
-                    onChange={v => {
-                        const array = [...config.filterValue || []]
-                        array[index] = {
-                            ...array[index],
-                            operator: v as FilterOperator
-                        }
-                        setConfig({
-                        ...config,
-                        filterValue: array
-                    })
-                    }}
-                    value={config.filterValue[index]?.operator || ""}
-                    placeholder={t('请选择')}
-                    optionList={filterTypeOperators}
-                >
-
-                </Select>
-                  {
-                    [FieldType.ModifiedTime, FieldType.CreatedTime, FieldType.DateTime].includes(config.allFields.find(el => el.id === item.fieldId)?.type) 
-                    ? 
-                    <DatePicker value={filterTodayOrYesterday(config.filterValue[index]?.value, config)} onChange={v => {
-                          const array = [...config.filterValue || []];
-                          array[index] = {
-                            ...array[index],
-                            value: v ? dayjs(v as Date).format(config.format) : ''
-                          };
-                          setConfig({
-                            ...config,
-                            filterValue: array
-                          });
-                        } } style={{ flex: 1 }} bottomSlot={<BottomSlot onCheck={ (v: 'today' | 'yesterday') => {
-                          const array = [...config.filterValue || []];
-                           array[index] = {
-                            ...array[index],
-                            value: v
-                          };
-                          setConfig({
-                            ...config,
-                            filterValue: array
-                          });
-                        } } /> } />
-                    :
-                    <Input placeholder={t(`请输入`)} value={config.filterValue[index]?.value} onChange={v => {
-                          const array = [...config.filterValue || []];
-                          array[index] = {
-                            ...array[index],
-                            value: v
-                          };
-                          setConfig({
-                            ...config,
-                            filterValue: array
-                          });
-                        } } style={{ flex: 1 }}></Input>
-                  }
-                  <CloseOutlined className={'close-icon'} onClick={() => {
-                          const array = [...config.filterValue || []];
-                          array.splice(index, 1);
-                          setConfig({
-                            ...config,
-                            filterValue: array
-                          });
-                        } } />
-                </div>
-              )
-            }) }
-            <Button icon={<PlusOutlined />} onClick={() => {
-              setConfig({
-                ...config,
-                filterValue: [...config.filterValue || [], {
-                  fieldId: fields[0]?.id || "",
-                  operator: "eq",
-                  value: ""
-                }]
-              })
-            }}>{t('添加过滤条件')}</Button>
-            </div>
-        </div>
-
-    </div>)
-
-}
-
-function BottomSlot(props: { onCheck: (v: 'today' | 'yesterday') => void }) {
-    return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end', padding: '8px 12px' }}>
-          <Button type="tertiary" size="small" onClick={() => props.onCheck('yesterday')}>昨天</Button>
-          <Button type="tertiary" size="small" onClick={() => props.onCheck('today')}>今天</Button>
-        </div>
-    );
-};
-
-export default function App() {
-  const [locale, setLocale] = useState(zhCN);
-  const { t } = useTranslation()
- const [config, setConfig] = useState<IMileStoneConfig>({
-        title: t("文本转换"),
-        color: colors[0],
-        dateType: 'text',
-        iconType: 'preset',
-        presetIconIndex: 1,
-        customIcon: "",
-        dateInfo: {
-            tableId: '',
-            fieldId: '',
-            dateType: 'earliest',
-            fieldName: ''
-        },
-        target: "",
-        format: 'YYYY-MM-DD',
-        fontSize: 13,
-        filterValue: [],
-        allFields: [],
-    })
-  const [theme, setTheme] = useState('LIGHT')
-  const [fields, setFields] = React.useState<any[]>([]);
-  const [isMultipleBase, setIsMultipleBase] = useState<boolean | undefined>(
-    undefined
-  );
-  const dashboardRef = useRef<IDashboard>(dashboard);
-
-  useEffect(() => {
-    (async () => {
-      const env = await bridge.getEnv();
-      setIsMultipleBase(env.needChangeBase ?? false);
-    })();
-  }, []);
-
-  useEffect(() => {
-    (async () => {
-      if (!isMultipleBase) {
-        return;
-      }
-      const workspaceBitable = await workspace.getBitable(
-        config.dateInfo.baseToken!
       );
-      const workspaceDashboard = workspaceBitable?.dashboard || dashboard;
-      dashboardRef.current = workspaceDashboard;
-    })();
-  }, [config.dateInfo.baseToken, isMultipleBase]);
-
-  const isCreate = dashboardRef.current.state === DashboardState.Create;
-  /** 是否配置模式下 */
-  const isConfig = dashboardRef.current.state === DashboardState.Config || isCreate;
-
-    const changeDateType = (type: 'text' | 'ref') => {
-        let dateInfo: any = {}
-        if (type === 'text') {
-        }
-        if (type === 'ref') {
-            dateInfo = {
-                tableId: '',
-                fieldId: '',
-                dateType: 'earliest'
-            }
-        }
-        setConfig({
-            ...config,
-            dateType: type,
-            dateInfo
-        })
-    }
-    const changeLang = (lang: 'en-us' | 'zh-CN') => {
-        if (lang === 'zh-CN') {
-            setLocale(zhCN);
-            dayjs.locale('zh-cn');
-        } else {
-            setLocale(enUS);
-            dayjs.locale('en-ud');
-        }
     }
 
-   useEffect(() => {
-        bitable.bridge.getLocale().then((lang) => {
-            changeLang(lang as any)
-        })
-
-        function changeTheme({ theme, bgColor }: { theme: string, bgColor: string }) {
-            if (!isConfig) {
-                return
-            }
-            const body = document.querySelector('body');
-            if (theme === 'DARK') {
-                // @ts-ignore
-                body.setAttribute('theme-mode', 'dark');
-                setTheme('DARK')
-            } else {
-                // @ts-ignore
-                body.removeAttribute('theme-mode');
-                setTheme('LIGHT')
-            }
-            // @ts-ignore
-            body.style.setProperty('--bg-color', bgColor);
-        }
-
-        dashboardRef.current.getTheme().then((theme) => {
-            // @ts-ignore
-            changeTheme({ theme: theme.theme, bgColor: theme.chartBgColor });
-        })
-        dashboardRef.current.onThemeChange(res => {
-            // console.log("them 变化", res)
-            changeTheme({ theme: res.data.theme, bgColor: res.data.chartBgColor });
-        });
-
-        // bitable.bridge.getTheme().then((theme) => {
-        //     console.log("theme", theme)
-        //     changeTheme(theme)
-        // })
-        // bitable.bridge.onThemeChange((res) => {
-        //     changeTheme(res.data.theme)
-        // })
-
-    }, [])
-
-  const updateConfig = (res: any) => {
-    const { customConfig, dataConditions } = res;
-    const baseToken = dataConditions?.[0]?.baseToken
-    if (customConfig) {
-      setConfig((pre) => {
-        const tempConfig = {
-          ...pre,
-          ...customConfig,
-        }
-        return {
-          ...tempConfig,
-          dateInfo: {
-            ...tempConfig.dateInfo,
-            baseToken
-          }
-        };
-      });
-      setTimeout(() => {
-        // 预留3s给浏览器进行渲染，3s后告知服务端可以进行截图了
-        dashboardRef.current.setRendered();
-      }, 3000);
+    // 展示/全屏状态
+    if (!markdownContent) {
+      console.log('【调试】展示状态 - markdownContent 为空');
+      console.log('【调试】当前配置:', initialConfig);
+      
+      return (
+        <div className="content-center" style={{ flexDirection: 'column' }}>
+          {stateInfo}
+          <Empty
+            title="暂无内容"
+            description="请检查数据源配置或数据是否存在"
+          />
+          <div style={{ marginTop: 24, padding: 16, background: 'var(--semi-color-fill-0)', borderRadius: 6, maxWidth: 400 }}>
+            <Text strong>排查建议：</Text>
+            <ul style={{ marginTop: 8, paddingLeft: 20 }}>
+              <li>检查数据表是否有数据</li>
+              <li>检查选择的字段是否包含内容</li>
+              <li>尝试重新配置数据源</li>
+            </ul>
+          </div>
+          <div style={{ marginTop: 16, padding: 12, background: '#fffbe6', borderRadius: 4, maxWidth: 400 }}>
+            <Text type="warning" size="small">
+              💡 按 F12 打开控制台查看详细调试信息
+            </Text>
+          </div>
+        </div>
+      );
     }
-  }
 
-  React.useEffect(() => {
-    if (isCreate) {
-      return
-    }
-    // 初始化获取配置
-    dashboardRef.current.getConfig().then(updateConfig);
-  }, []);
-
-
-  React.useEffect(() => {
-    const offConfigChange = dashboardRef.current.onConfigChange((r) => {
-      // console.log('====onConfigChange', r)
-      // 监听配置变化，协同修改配置
-      updateConfig(r.data);
-    });
-    return () => {
-      offConfigChange();
-    }
-  }, []);
-
-  const onClick = () => {
-    // 保存配置
-    // console.log("保存配置", config)
-    let dataConditions: IDataCondition[] | null = []
-    if (config.dateType === 'ref') {
-      dataConditions = [
-        {
-          tableId: config.dateInfo.tableId,
-          groups: [
-            {
-              fieldId: config.dateInfo.fieldId,
-            }
-          ],
-          baseToken: config.dateInfo.baseToken,
-        }
-      ];
-    }
-    dashboardRef.current.saveConfig({
-      customConfig: config,
-      dataConditions: dataConditions,
-    } as any)
+    return (
+      <div style={{ padding: 20 }}>
+        {stateInfo}
+        <Card className="markdown-card" bodyStyle={{ padding: 24 }}>
+          <MarkdownRenderer content={markdownContent} />
+        </Card>
+      </div>
+    );
   };
-  const [update, setUpdate] = useState(0);
-//  useEffect(() => {
-  //  if (
-   //   dashboardRef.current.state === DashboardState.FullScreen ||
-    //  dashboardRef.current.state === DashboardState.View
-    //) {
-     // setInterval(() => {
-       // setUpdate(Math.random());
-       // dashboardRef.current.setRendered();
-     // }, 1000 * 30)
-    //}
-//  }, [])
 
+  // ============ 主渲染 ============
   return (
-       <main className={classnames({
-            'main-config': isConfig,
-            'main': true,
-        })}>
-
-            <ConfigProvider locale={locale}>
-
-                <div className='content'>
-                    <MileStone key={update} config={config} isConfig={isConfig} fields={fields} />
-                </div>
-                {
-                    isConfig && (
-                        <div className='config-panel'>
-                            <div className='form'>
-                                <div className='form-item'>
-                                    <div className='label'>{t("文本标题")}</div>
-                                    <Input
-                                        value={config.title}
-                                        onChange={(v) => {
-                                            setConfig({
-                                                ...config,
-                                                title: v
-                                            })
-                                        }} />
-                                </div>
-                                <div className='form-item'>
-                                    <div className={'label'}>{t('文本')}</div>
-                                    <div className={'common-wrap'}>
-                                        <div style={{
-                                            color: 'var(--small-title-text-color)',
-                                            fontSize: 12,
-                                        }}>
-                                            {t('选择文本')}
-                                        </div>
-                                        <div className={'tab-wrap'}>
-                                            <div
-                                                onClick={() => changeDateType('text')}
-                                                className={classNames({
-                                                    'active': config.dateType === 'text',
-                                                    'tab-item': true,
-                                                })}>
-                                                {t('指定文本')}
-                                            </div>
-                                            <div
-                                                onClick={() => changeDateType('ref')}
-                                                className={classNames({
-                                                    'active': config.dateType === 'ref',
-                                                    'tab-item': true,
-                                                })}>
-                                                {t('选择文本')}
-                                            </div>
-                                        </div>
-                                        {config.dateType === 'text' && (
-                                                <div>
-                                                    <Input
-                                                        style={{ width: '100%', marginTop: 8 }}
-                                                        value={config.title}
-                                                        onChange={(value) => {
-                                                            setConfig({
-                                                                ...config,
-                                                                target: value,
-                                                            })
-                                                        }}
-                                                    />
-                                                </div>
-                                            )}
-
-                                        {
-                                            config.dateType === 'ref' && (
-                                                <SelectRefDate config={config} setConfig={setConfig} isMultipleBase={isMultipleBase} fields={fields} setFields={setFields} />
-                                            )
-                                        }
-                                    </div>
-                                </div>
-
-                        
-                                <Divider margin={10} />
-
-                                <SettingIcon theme={theme} config={config} setConfig={setConfig} />
-
-                          
-
-                            </div>
-
-                            <Button
-                                className='btn'
-                                type="primary"
-                                autoInsertSpace={false}
-                                onClick={onClick}
-                            >
-                                {t('确定')}
-                            </Button>
-                        </div>
-                    )
-                }
-            </ConfigProvider>
-
-        </main>
-    )
-}
-
-function MarkdownView({ md, fontSize }: { md: string; fontSize: number }) {
-  console.log('MarkdownView', md, fontSize);
-    return (
-        <div className="markdown-body" style={{ fontSize: `${fontSize}px` }}>
-            <ReactMarkdown>
-                {md}
-            </ReactMarkdown>
+    <Layout className="app-layout">
+      {/* 主内容区 */}
+      <Content className="app-content">
+        {/* 顶部标题栏 - 展示状态和全屏状态隐藏 */}
+        {state !== DashboardState.View && state !== DashboardState.FullScreen && (
+          <div style={{ 
+            padding: '12px 20px', 
+            borderBottom: '1px solid var(--semi-color-border)',
+            background: 'var(--semi-color-bg-1)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between'
+          }}>
+            <Title heading={6} style={{ margin: 0 }}>
+              📄 Markdown 渲染器
+            </Title>
+            <Tag color={getStateColor(state)} size="small">
+              {getStateName(state)}
+            </Tag>
+          </div>
+        )}
+        
+        {/* 内容区域 */}
+        <div style={{ flex: 1, overflow: 'auto' }}>
+          {renderContent()}
         </div>
+      </Content>
 
-    );
-}
-
-
-function MileStone({ config, isConfig, fields }: {
-    config: IMileStoneConfig,
-    isConfig: boolean;
-    fields: any[];
-}) {
-  console.log('所有字段22', config.allFields);
-  
-
-    const { title, format, color, target } = config
-    const [time, setTime] = useState("")
-    const [diffDay, setDiffDay] = useState(0)
-    const { t } = useTranslation()
-    const [theme, setTheme] = useState('LIGHT')
-
-    const [md, setMd] = useState('');
-    const [tableData, setTableData] = useState<IRecord[]>([]);
-
-  const dashboardRef = useRef<IDashboard>(dashboard);
-
-  useEffect(() => {
-    (async () => {0
-      const workspaceBitable = await workspace.getBitable(
-        config.dateInfo.baseToken!
-      );
-      const workspaceDashboard = workspaceBitable?.dashboard || dashboard;
-      dashboardRef.current = workspaceDashboard;
-    })();
-  }, [config.dateInfo.baseToken]);
-
-    useEffect(() => {
-        setDiffDay(Math.ceil((new Date(time).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
-    }, [time])
-
-   useEffect(() => {
-
-        function changeTheme({ theme, bgColor }: { theme: string, bgColor: string }) {
-            const body = document.querySelector('body');
-            if (theme === 'DARK') {
-                // @ts-ignore
-                body.setAttribute('theme-mode', 'dark');
-                setTheme('DARK')
-
-            } else {
-                // @ts-ignore
-                body.removeAttribute('theme-mode');
-                setTheme('LIGHT')
-            }
-
-            // 设置 style 的变量
-            // console.log("bgColor", bgColor)
-            // @ts-ignore
-            body.style.setProperty('--bg-color', bgColor);
-        }
-
-        dashboardRef.current.getTheme().then((theme) => {
-            // console.log("them 变化111", theme, theme.theme)
-            // @ts-ignore
-            changeTheme({ theme: theme.theme, bgColor: theme.chartBgColor });
-        })
-        dashboardRef.current.onThemeChange(res => {
-            // console.log("them 变化", res)
-            changeTheme({ theme: res.data.theme, bgColor: res.data.chartBgColor });
-        });
-
-        // bitable.bridge.getTheme().then((theme) => {
-        //     console.log("theme", theme)
-        //     changeTheme(theme)
-        // })
-        //
-        // bitable.bridge.onThemeChange((r) => {
-        //     let theme = r.data.theme
-        //     changeTheme(theme)
-        // })
-    }, [])
-
-  useEffect(() => {
-    setTime("")
-   const getMaxMinTimeFromData = (data: IData) => {
-            let maxDate = data[1][0].value as number, minDate = data[1][0].value as number;
-            let maxTimeFormat = "";
-            let minTimeFormat = "";
-
-            for (let i = 1; i < data.length; i++) {
-                const d = data[i][0].value as number;
-                if (d) {
-                    maxDate = Math.max(maxDate, d)
-                    minDate = Math.min(minDate, d)
-                }
-            }
-
-            minTimeFormat = dayjs(minDate).format(format)
-            maxTimeFormat = dayjs(maxDate).format(format)
-            return {
-                maxTimeFormat,
-                minTimeFormat,
-                maxDate,
-                minDate,
-            }
-        }
-
-    async function getTime() {
-      
-      let data: IData = [];
-      let tableId = config.dateInfo.tableId
-      let fieldId = config.dateInfo.fieldId
-      let dateType = config.dateInfo.dateType;
-      console.log("====getTime", config, fields, {
-          tableId: tableId,
-          groups: fields.map(field => ({ fieldId: field.id })),
-        })
-
-
-        // if (isConfig) {
-          async function getAllRecords(table: ITable) {
-            let pageToken: string | undefined
-            const allRecords = []
-
-            do {
-              const res = await table.getRecords({
-                pageToken,
-                pageSize: 500,
-              })
-
-              allRecords.push(...res.records)
-              pageToken = res.pageToken
-            } while (pageToken)
-
-            return allRecords
-          }
-          const table = await bitable.base.getTableById(tableId)
-          const datas = await getAllRecords(table);
-          setTableData(datas)
-
-          // data = await dashboardRef.current.getPreviewData({
-          //   tableId: tableId,
-          //   // groups: fields.map(field => ({ fieldId: field.id })),
-          // });
-          // data = await dashboardRef.current.getData()
-
-          console.log("====getTime - 预览数据", data, datas);
-          
-      // } else {
-      //   data = await dashboardRef.current.getData()
-      //   console.log('====getTime - 非预览模式getData', data)
-      //   if (data.length) {
-      //     // 2. 取该列
-      //     setTableData(data as any)
-      //   }else {
-      //     setTableData([])
-      //   }
-      // }
-      
-      
-
-      // const { maxTimeFormat, minTimeFormat, maxDate, minDate } = getMaxMinTimeFromData(data)
-
-      // let time = ''
-
-      // if (dateType === 'earliest') {
-      //   time = minTimeFormat
-      // } else {
-      //   time = maxTimeFormat
-      // }
-      // // console.log("====getTime 重新设置数据的时间", time)
-      setTimeout(() => {
-        setTime(dayjs(time).format(format))
-      }, 300);
-      // await dashboardRef.current.setRendered()
-    }
-
-    function loadTimeInfo(type: string) {
-      if (config.dateType === "ref") {
-        getTime()
-      } else {
-        setTime(config.target ? dayjs(config.target).format(config.format) : '')
-      }
-    }
-
-    loadTimeInfo('====useEffect')
-    
-
-    // @ts-ignore;
-    window._loadTimeInfo = loadTimeInfo;
-    // @ts-ignore;
-    window._dashboard = dashboardRef.current;
-    let off = dashboardRef.current.onDataChange((r) => {
-      // console.log("====onDataChange触发", r);// TODO 由saveConfig触发的此回调。这个时机触发的n（n可能有几十秒），onDataChange拿到的数据，以及调用getData拿到的数据还是旧的
-      setTimeout(() => {
-        loadTimeInfo('===onDataChange 延迟1s触发');
-      }, 1000);
-      if (config.dateType === "ref") {
-      //     let info = r.data
-      //     const { maxTimeFormat, minTimeFormat, maxDate, minDate } = getMaxMinTimeFromData(info)
-      //     const time = config.dateInfo.dateType === 'earliest' ? minTimeFormat : maxTimeFormat
-      //     console.log("data change,时间", time)
-          setTime(dayjs().format(format))
-      }
-    })
-    return () => {
-      off()
-    }
-  }, [
-    config.dateType,
-    config.dateInfo.tableId,
-    config.dateInfo.baseToken,
-    config.dateInfo.dateType,
-    config.target,
-    config.format,
-    isConfig,
-    config.allFields,
-  ]
-)
-
-
-useEffect(() => {
-  if(config.dateType !== 'ref') return
-  console.log('所有字段', config.allFields, JSON.stringify(config.allFields), config);
-  
-  const filteredData =filterRecordsByFieldValue(tableData, config.filterValue, config.allFields.reduce((acc, field) => {
-    acc[field.id] = field.type;
-    return acc;
-  }, {} as Record<string, FieldType>), config)
-  if(filteredData.length === 0) {
-    setMd(`> ${t('没有匹配的数据')}`)
-  } else if(filteredData.length === 1) {
-    const cellValue = filteredData[0].fields[config.dateInfo.fieldId];
-    const md = Array.isArray(cellValue) ? cellValue.map((value) => value?.text ?? value?.value ?? value?.name ?? '').join('\n') : cellValue?.text ?? cellValue?.value ?? cellValue?.name ?? cellValue;
-    setMd(md)
-  } else {
-    setMd(`> ${t('请输入更多的数据过滤条件来过滤数据')}`)
-  }
-}, [tableData, config.filterValue, config.dateInfo.fieldId, config.allFields])
-    
-    // if(config.dateType === 'ref' && time) {
-    //     return <MarkdownView md={md} fontSize={config.fontSize} />
-    // }
-
-
-   return (
-        <Spin spinning={!time}>
-          {
-            config.dateType === 'ref' && time 
-            ? 
-            <MarkdownView md={md} fontSize={config.fontSize} />
-            : 
-            <div style={{ width: '100%', textAlign: 'center', overflow: 'hidden' }}>
-                <div style={{
-                    display: "flex",
-                    justifyContent: "center"
-                }}>
-                    <div style={{
-                        position: "relative",
-                        width: `${isConfig ? "16vmin" : "16vmax"}`,
-                        height: `${isConfig ? "16vmin" : "16vmax"}`,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center"
-                    }}>
-                        {config.iconType === "custom" && config.customIcon && <img style={{ width: "93%" }} src={URL.createObjectURL(new Blob([config.customIcon], { type: 'image/svg+xml' }))} />}
-
-                        {/*<svg style={{*/}
-                        {/*    width: `${isConfig ? "16vmin" : "16vmax"}`,*/}
-                        {/*    height: "auto"*/}
-                        {/*}} width="91" height="90" viewBox="0 0 91 90" fill="none" xmlns="http://www.w3.org/2000/svg">*/}
-                        {/*    <rect x="0.5" width="90" height="90" rx="20"*/}
-                        {/*          fill={(color === "#1F2329" && theme === "DARK") ? "#FFF" : color} fill-opacity="0.1"/>*/}
-                        {/*    <path*/}
-                        {/*        d="M67.8286 39.125C63.9929 39.7571 57.7357 39.9286 53.5786 32.0429C49.1214 23.5679 41.9214 23.3107 37.7107 24.0821C35.6643 24.4571 34.1321 26.1714 34.1321 27.8321V48.8964C35.3429 49.3571 36.6393 48.875 36.9714 48.8107C37.0571 48.7893 37.1321 48.7786 37.2286 48.7571C39.9071 48.1679 42.7357 47.8893 49.7429 51.2536C58.5286 55.4643 66.2214 47.7071 69.2 42.3071C69.4143 41.9321 70.1321 40.1429 70.1321 38.4286C69.0929 38.8571 67.8286 39.125 67.8286 39.125ZM31.5714 23H29.8571C29.3857 23 29 23.3857 29 23.8571V70.1429C29 70.6143 29.3857 71 29.8571 71H31.5714C32.0429 71 32.4286 70.6143 32.4286 70.1429V23.8571C32.4286 23.3857 32.0429 23 31.5714 23Z"*/}
-                        {/*        fill={(color === "#1F2329" && theme === "DARK") ? "#FFF" : color}/>*/}
-                        {/*</svg>*/}
-
-                        {config.iconType === "preset" && <>
-                            <div style={{
-                                position: "absolute",
-                                left: 0,
-                                top: 0,
-                                borderRadius: "25%",
-                                width: `100%`,
-                                height: `100%`,
-                                background: (color === "#1F2329" && theme === "DARK") ? "#FFF" : color,
-                                opacity: 0.1
-                            }}>
-                            </div>
-                            {
-                                // @ts-ignore
-                                IconsMap[config.presetIconIndex]((color === "#1F2329" && theme === "DARK") ? "#FFF" : color, isConfig ? "11vmin" : "11vmax")
-                            }
-                        </>}
-                    </div>
-                </div>
-            </div>
-          }
-            
-        </Spin>
-    );
-
-}
-
-
-/* =========================
- * 统一中间结构
- * ========================= */
-interface NormalizedCell {
-  texts: string[]; // 用于搜索
-  links?: { text: string; url: string }[]; // 用于 markdown
-}
-
-/* =========================
- * 核心：只写一次的解析函数
- * ========================= */
-export function normalizeCellValue(
-  value: any,
-  fieldType?: FieldType,
-  config: IMileStoneConfig = {
-    title: "文本转换",
-        color: colors[0],
-        dateType: 'text',
-        iconType: 'preset',
-        presetIconIndex: 1,
-        customIcon: "",
-        dateInfo: {
-            tableId: '',
-            fieldId: '',
-            dateType: 'earliest',
-            fieldName: ''
-        },
-        target: "",
-        format: 'YYYY-MM-DD',
-        fontSize: 13,
-        filterValue: [],
-        allFields: [],
-  }
-): NormalizedCell {
-  if (value == null) return { texts: [] };
-
-  console.log('value:', value, 'fieldType:', fieldType, 'config:', config);
-  switch (fieldType) {
-    /* ===== 文本类 ===== */
-    // case FieldType.Text:
-    // case FieldType.Lookup:
-    case FieldType.Formula:
-      if (Array.isArray(value)) {
-        return {
-          texts: value
-            .map(v => v?.text ?? '')
-            .filter(Boolean),
-        };
-      }
-      if (typeof value === 'object') {
-        return { texts: [value.text ?? ''] };
-      }
-      return { texts: [String(value)] };
-
-    /* ===== 链接 ===== */
-    case FieldType.Url:
-      if (Array.isArray(value)) {
-        return {
-          texts: value.map(v => v?.text ?? ''),
-          links: value
-            .filter(v => v?.link)
-            .map(v => ({
-              text: v.text ?? '',
-              url: v.link,
-            })),
-        };
-      }
-      return { texts: [value?.text ?? String(value)] };
-
-    /* ===== 单选 ===== */
-    case FieldType.SingleSelect:
-      return { texts: [value?.text ?? ''] };
-
-    /* ===== 多选 ===== */
-    case FieldType.MultiSelect:
-      return {
-        texts: Array.isArray(value)
-          ? value.map(v => v?.text ?? '')
-          : [],
-      };
-
-    /* ===== 人员 ===== */
-    // case FieldType.User:
-    // case FieldType.CreatedUser:
-    case FieldType.ModifiedUser:
-      return {
-        texts: Array.isArray(value)
-          ? value.map(v => v?.name ?? v?.text ?? '')
-          : [value?.name ?? value?.text ?? ''],
-      };
-
-    /* ===== 附件 ===== */
-    case FieldType.Attachment:
-      return {
-        texts: Array.isArray(value)
-          ? value.map(v => v?.name ?? '')
-          : [],
-      };
-
-    /* ===== 数字 / 时间 ===== */
-    // case FieldType.Number:
-    // case FieldType.Currency:
-    // case FieldType.Rating:
-    // case FieldType.Progress:
-    // case FieldType.AutoNumber:
-    case FieldType.DateTime:
-      console.log('value:', value, 'config:', config, 'aaaaaaaaaaaaaaaaaaaaa', dayjs(value).format(config.format));
-      
-      return { texts: [value ? dayjs(value).format(config.format) : ''] };
-    case FieldType.CreatedTime:
-      return { texts: [value ? dayjs(value).format(config.format) : ''] };
-    case FieldType.ModifiedTime:
-      return { texts: [String(value)] };
-
-    /* ===== 复选框 ===== */
-    case FieldType.Checkbox:
-      return { texts: [value ? 'true' : 'false'] };
-
-    /* ===== 兜底（关键修复点） ===== */
-    default:
-      if (Array.isArray(value)) {
-        return {
-          texts: value
-            .map(v => v?.text ?? v?.name ?? v?.value ?? '')
-            .filter(Boolean),
-        };
-      }
-
-      if (typeof value === 'object') {
-        return {
-          texts: [
-            value.text ??
-             value?.value ??
-              value.name ??
-              '',
-          ].filter(Boolean),
-        };
-      }
-
-      return { texts: [String(value)] };
-  }
-}
-
-
-/* =========================
- * 搜索用：转为纯文本（忽略大小写）
- * ========================= */
-export function cellValueToSearchText(
-  value: any,
-  fieldType?: FieldType,
-  config?: IMileStoneConfig
-): string {
-  
-  return normalizeCellValue(value, fieldType, config)
-    .texts.join(' ')
-    .toLowerCase();
-}
-
-/* =========================
- * 记录级过滤（按 fieldId）
- * filterValue: [{ fieldId, operator, value }]
- * ========================= */
-function filterRecordsByFieldValue(
-  records: any[],
-  filterValue: FilterValue[],
-  fieldTypeMap: Record<string, FieldType>,
-  config?: IMileStoneConfig
-) {
-  console.log(records, 'records', filterValue, fieldTypeMap, config);
-
-  return records.filter(record =>
-    filterValue.every(({ fieldId, operator, value }) => {
-      console.log('fieldId:', fieldId, 'operator:', operator, 'value:', value, 'record:', record);
-      const rawValue = record.fields[fieldId];
-
-      // 为空 / 不为空的特殊处理
-      if (rawValue == null) {
-        return operator === 'empty';
-      }
-
-      const text = cellValueToSearchText(
-        rawValue,
-        fieldTypeMap[fieldId],
-        config
-      );
-
-      console.log('searchText:', text);
-
-      return matchByOperator(text, operator, [FieldType.ModifiedTime, FieldType.CreatedTime, FieldType.DateTime].includes(fieldTypeMap[fieldId]) ? filterTodayOrYesterday(value, config) : value);
-    })
+      {/* 配置面板 */}
+      {(state === DashboardState.Config || state === DashboardState.Create) && (
+        <Sider className="app-sider">
+          {renderConfigPanel()}
+        </Sider>
+      )}
+    </Layout>
   );
 }
 
-function filterTodayOrYesterday(
-  type: string,
-  config: Partial<IMileStoneConfig> = {}
-) {
-  console.log('jintian=============', dayjs().format(config.format));
-  
-  if(type === 'today') return dayjs().format(config.format);
-  if(type === 'yesterday') return dayjs().subtract(1, 'day').format(config.format);
-  return type
-}
-
-function matchByOperator(
-  text: string,
-  operator: FilterOperator,
-  compareValue?: string
-): boolean {
-  const left = text.trim().toLowerCase();
-  const right = compareValue?.trim().toLowerCase() ?? '';
-
-  switch (operator) {
-    case 'eq':
-      return left === right;
-
-    case 'neq':
-      return left !== right;
-
-    case 'contains':
-      return left.includes(right);
-
-    case 'not_contains':
-      return !left.includes(right);
-
-    case 'empty':
-      return left === '';
-
-    case 'not_empty':
-      return left !== '';
-
-    default:
-      return true;
-  }
-}
-
-
+export default App;
